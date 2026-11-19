@@ -1,0 +1,26 @@
+id = "extradisks"
+name = "Extra Disks"
+version = "0.2.0"
+description = """A port of Extra Disks for Horizon: the 1024k item storage, as a block that holds
+1,048,576 items in up to 256 resources and as a portable disk that carries the same storage in its
+item component. Upstream both are a Refined Storage network node with a GUI; this port has no
+network and no screen, so the block is used by right-click and the /extradisks commands, and the
+disk by /extradisks disk. The other rungs and the fluid, chemical and part families are not ported
+yet."""
+authors = ["MelanX", "AdLf0208"]
+# A native mod: Rust in src/, compiled by the launcher against the game build [native] pins,
+# beside data/ and assets/. The id is the resource namespace and the only identity: Cargo's
+# package name and version are not the mod's.
+api = "0.2"
+# "both" is the installation side, not the hook's: an integrated server belongs to the client
+# installation, so a LAN host or a single-player world needs both.
+side = "both"
+# The one shared value every manifest carries ("May add blocks, items, mob effects and entity
+# types"); this mod declares the block entity type its storage block uses, and its content half
+# declares the block, the disk item and the creative tab.
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"
