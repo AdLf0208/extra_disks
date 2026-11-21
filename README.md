@@ -4,9 +4,11 @@ A clean-room Rust port of [Extra Disks](https://github.com/ChaoticTrials/ExtraDi
 (`1.21.1-4.0.15`, **Apache-2.0**) to [Horizon](https://github.com/horizon-rust/horizon),
 Minecraft Java Edition 26.3.
 
-**Slice 1: the 1024k item storage.** One storage block and one storage disk, each
-holding **1,048,576 items** in up to 256 resources, with insert, extract, contents
-that survive a relaunch and the upstream refusal of an insert past capacity.
+**Slices 1 and 2: the 1024k item storage.** One storage block and one storage disk,
+each holding **1,048,576 items** in up to 256 resources, with insert, extract,
+contents that survive a relaunch and the upstream refusal of an insert past
+capacity. Breaking the block gives its contents back **and** drops the block
+itself (its carried loot table is in 26.3's dialect; 0.2.1).
 
 ```text
 /extradisks info <x> <y> <z>                      what the block holds
@@ -33,7 +35,7 @@ Refined Storage node), the GUI and the energy use. The full list is in
 `data/` — the block, the disk item, models, textures, lang, loot, creative tab)
 and the code (`src/`, compiled by the launcher against the pinned game build).
 Put it in the launcher's mod list and play. It is built for Horizon
-`0b14f8acfd97fa2c750e42795249dcc981178ca4` with horizon-mixins
+`0a875da91dbb0fdcb7ba8c42c11341aa229af51a` with horizon-mixins
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0` (SDK/API `0.2`).
 
 ## Build and test
@@ -49,11 +51,20 @@ rm -f Cargo.lock                                      # see notes.md, trap 5
 CARGO_INCREMENTAL=0 cargo horizon-mod build           # -> target/horizon-mod/extradisks.hmod
 cp target/horizon-mod/extradisks.hmod ./extradisks.hmod
 cargo horizon-mod check extradisks.hmod               # the registry's own check
-cargo horizon-mod fits extradisks.hmod --build nightly
+cargo horizon-mod fits extradisks.hmod --build 0a875da
 ```
 
-`tools/e2e.sh` is the in-game scenario; it needs a launcher-built game carrying
-this package and a `horizon-ctl`, which this machine does not have.
+`tools/e2e.sh` is the in-game scenario. Build a game that carries the package and run the leg in one
+slot lease:
+
+```sh
+eval "$(ports/tools/launcher-game.sh env extradisks)"       # GAME, CTL, CONTROL_GAME, RES
+ports/tools/build-slot.sh run --job e2e-extradisks --port ports/extradisks --step e2e -- \
+    bash ports/extradisks/tools/e2e.sh                      # PASS + EXIT:0
+SELFTEST=1 …                                                # must FAIL (EXIT:1)
+GAME=$CONTROL_GAME …                                        # must FAIL (EXIT:1)
+python3 ../tools/check-e2e-logs.py extradisks-e2e --strict
+```
 
 ## Licence
 

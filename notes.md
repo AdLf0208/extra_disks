@@ -26,11 +26,10 @@ is **byte-identical** to the pre-migration `mixins/extradisks/runtime.rs`
 (sha256 `19614096ed66aea0fc3eacf06e7ef543eb664659be4298c7dab236d59e34aa93`),
 including the copy inside the built package.
 
-Status: **slice 1 implemented** — the 1024k item storage (1,048,576 items) as a
-block and as a portable disk. The behaviour was verified in-game as 0.1.0; the
-0.2.0 interactions (the right-click, the break and the command family over the
-SDK's typed hooks) are **compiled and packaged against the exact pin but not
-re-run in-game here** (no `horizon-launcher` on this machine) — gap 12 below.
+Status: **slice 2 delivered as 0.2.1** — the 1024k item storage (1,048,576 items) as a block and
+as a portable disk, now proven **in game at the campaign pin** (`0a875da`), together with the port's
+carried block loot table in 26.3's dialect (slice 2 closes the 0.2.0 "compiled but never re-run"
+gap 12). See [`## Slice 2`](#slice-2-2026-11-21--the-carried-loot-table-proven-in-game-021).
 
 ## The slice
 
@@ -75,7 +74,92 @@ crate) and no mod menu, so:
 The admin commands move items without the inventory (they are how the exact
 1,048,576 capacity is proved); the right-click path conserves items.
 
-## Upstream files read
+## Slice 2 (2026-11-21) — the carried loot table, proven in game (0.2.1)
+
+Slice chosen from this file's own gap 6 — *"the loot table itself still drops a plain block item"* —
+and the parity rule (2026-11-20): every carried loot table is exercised. A player who breaks the
+storage block should get the block back beside its contents; the block's own table decides that.
+Tier fit: the ledger row is class **content**, tier **machines**, so this is carried content *of* a
+machines port and no tier is exceeded (the brief's "deep" is template text; ledger +
+`horizon/docs/modpacks.md` govern). No Rust changed: the defect was in the carried JSON.
+
+**Re-pinned** to the campaign pin — SDK nightly `0a875da91dbb0fdcb7ba8c42c11341aa229af51a`
+(2026-11-20), mixins `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`; `cargo horizon-mod update` reported
+*"1 of the 252 items it uses changed"*, and the one note (the word `Item` at `src/commands.rs:80`) is
+a scanner false positive analysed below. Version `0.2.1`.
+
+**The defect, proved.** `data/extradisks/loot_table/blocks/1024k_item_storage_block.json` was written
+in NeoForge 1.21.1's dialect — a pool-level `"conditions": [ { "condition": … } ]` array beside
+`"bonus_rolls"`. 26.3 takes a **singular** `"condition": { "type": … }` and an integral `rolls`; the
+array form is silently false, so the block dropped nothing. The reference is the prepared 26.3
+resources' own `data/minecraft/loot_table/blocks/acacia_button.json` / `barrel.json` (all 1,139
+vanilla block tables use the singular key; `"bonus_rolls"` appears in none).
+
+**TDD, in the order the ruling asks for.** The family's rule cannot live in `runtime.rs` (a loot
+table is data and the crate's only dependency is `horizon-mod-api`), so the fail-capable tests are the
+harness assertions, written first and run red on the untouched package:
+
+| Red | Assertion | Verbatim |
+|---|---|---|
+| static | `tools/data_shape.py` — no loot table in the 1.21.1 dialect | `FAIL …: 1.21.1 loot table` / `pool 0: "conditions": [{"condition": "minecraft:survives_explosion"}]` / `pool 0: "bonus_rolls": 0.0` / `pool 0: "rolls": 1.0` — `data-shape-loot-red.log` |
+| in game | `tools/e2e.sh` — break the block in survival, vanilla barrel as the differential | `FAIL: the storage block dropped 0 of itself: …"drops":{},"items_left_on_ground":0…` on the broken build (38,036 B sha256 `5fce2d6c…59e`) — `../_shared/evidence/extradisks-e2e/e2e-loot-red.log`, whose `artifact:` line names that build |
+
+The red leg's differential is in the same log: `vanilla barrel: … "drops":{"minecraft:barrel":1} …`,
+so the empty drop was the block's loot table, not the break.
+
+**The fix** (minimal, the vanilla shape):
+
+```json
+"pools": [ { "condition": { "type": "minecraft:survives_explosion" },
+             "entries": [ { "type": "minecraft:item", "name": "extradisks:1024k_item_storage_block" } ],
+             "rolls": 1 } ]
+```
+
+`bonus_rolls` dropped, `rolls` integral, `random_sequence` kept.
+
+**Green, at the pin** (`../_shared/evidence/extradisks-e2e/e2e-launcher.log`, artifact
+38,022 B sha256 `100a271e…07a1a`):
+
+```
+artifact: extradisks.hmod 38022 B sha256 100a271e7879a3e3ab54e4090bb21c8f0e689d7f1ab6e62255dfc29eeed07a1a
+== the block's loot table drops it, with a vanilla block as the control ==
+  vanilla barrel: {… "block_before":"minecraft:barrel[facing=north,open=false]","drops":{"minecraft:barrel":1}, …"items_left_on_ground":1 …}
+  extradisks:1024k_item_storage_block: {… "block_before":"extradisks:1024k_item_storage_block[facing=north,open=false]","drops":{"extradisks:1024k_item_storage_block":1}, …"items_left_on_ground":0,"picked_up":{"extradisks:1024k_item_storage_block":1} …}
+== every carried loot table is in the 26.3 dialect ==
+  ok   extradisks.hmod:data/extradisks/loot_table/blocks/1024k_item_storage_block.json: 26.3 loot dialect (singular condition, rolls 1)
+data shape: 1 loot table(s), every one in the 26.3 dialect
+PASS: …
+EXIT:0
+```
+
+The rest of the leg is the 0.1.0 scenario re-run against the SDK package at this pin: the block
+places and starts empty; a held stack right-clicks in and comes back out; a command fills it to
+exactly 1,048,576 items and the next insert (and a new resource) is refused; a partial insert takes
+576 of 1,000; the disk carries 1,048,576 diamonds and gives 64 back; a vanilla barrel is not a
+storage block; the block keeps its contents across `save` + relaunch; and breaking gives 100 and
+2,000 items back to the breaker.
+
+**Counterfactual and control** (both `EXIT:1`, kept in the log set): `SELFTEST=1` flips the refused
+insert into "the storage grew" (`FAIL: expected '1,048,640 / 1,048,576 items', got '… 1,048,576 …'`);
+the unmodded control game refuses the first modded step (`Unknown block type
+'extradisks:1024k_item_storage_block'`, `FAIL: the block did not place`).
+
+**Harness repairs the re-run needed** (0.2.0's leg had never been run, gap 12): `ctl screen` is null
+or blocks in a `--headless` world at this pin, so readiness reads `wait-ready`'s snapshot
+(`.server.joined`) instead; `ctl state` is the reduced scripting summary with no `.server`; and three
+expectations matched 0.1.0 wording that the 0.2.0 code had already changed (`2,000` grouping and
+`The held 1024k storage disk:` for the disk's insert/extract answers). All are scenario fixes, not
+behaviour changes.
+
+**Tooling false positive recorded honestly:** `cargo horizon-mod fits extradisks.hmod --build
+0b14f8a` exits 1 with *"the type `Item` can no longer be built with a literal, and
+`src/commands.rs:80` builds it"*. Line 80 is the match arm `CommandArgumentValue::Item(stack)`; the
+build's usage scanner records it as a full literal construction of the unrelated `type:Item`, and
+`type:Item` is byte-identical in both builds' surfaces. Proof and consequences:
+`../_shared/evidence/extradisks/fits-other-FALSE-POSITIVE.md`. The pin run says `0a875da  made for`,
+`check` is green, and the argument demonstrably works in game.
+
+
 
 `ChaoticTrials/ExtraDisks`, branch `1.21.x`, commit `91da5f58` (2026-05-03) —
 the repository has no `1.21.1-4.0.15` tag, and this branch's sources match the
@@ -104,6 +188,20 @@ jar's data files. Two things that *look* like defects were checked and are not:
   `capacity * 1024`, consistent with the parent's 1k = 1,024;
 - the `1048576k` rung (1,073,741,824 items) is displayed as "1048m" in `en_us`
   and `262144k` as "262m" — a display abbreviation, not a capacity.
+
+**One carry error of the same class was found and fixed in slice 2 (2026-11-21).** It is not an
+upstream defect: the Java mod's own table is correct at 1.21.1. The **data this port carried** was
+left in the NeoForge 1.21.1 dialect, which the 26.3 parser refuses silently — `check`, `fits` and
+every unit test pass on such a package, which is exactly the class the parity rule exists for.
+
+| Artefact | 1.21.1 form that shipped | 26.3 form | What a player saw |
+|---|---|---|---|
+| `data/extradisks/loot_table/blocks/1024k_item_storage_block.json` | `"conditions": [ { "condition": "minecraft:survives_explosion" } ]`, `"bonus_rolls": 0.0`, `"rolls": 1.0` | `"condition": { "type": "minecraft:survives_explosion" }`, `"rolls": 1` | breaking a filled block gave its contents back but the block item itself vanished: `drops:{}`, 0 on the ground |
+
+Evidence for the 26.3 form, measured against the prepared 26.3 resources: all 1,139 block tables
+under `data/minecraft/loot_table/blocks/` use the singular `condition` and none uses `bonus_rolls`
+(`acacia_button.json`, `barrel.json`). `horizon/docs/modpacks.md:401` says the same: *"loot tables
+(`conditions` lists become one `condition`, …)"*. Red and green runs: `## Slice 2` above.
 
 ## Migration to the SDK format
 
@@ -340,10 +438,14 @@ The reviewer's items and their state:
    `improved_processor`) and the `refinedstorage:parts/items/1024k` tags, which
    this content mod cannot declare in another namespace and the parent port does
    not ship yet. The two items come from the creative tab.
-6. **Breaking the block** returns the contents to the breaker (deviation 1); the
-   loot table itself still drops a plain block item, because the pin has no loot
-   function that copies a mod block entity's saved compound into the dropped
-   item's components. Recorded as an API gap.
+6. **Breaking the block** returns the contents to the breaker (deviation 1), and
+   its own loot table now drops the block item too (slice 2, proved in game:
+   1 drop beside the vanilla barrel's 1). The **dropped item carries no storage
+   compound** — the pin's `copy_components` reaches vanilla block entities only.
+   `ARCHITECTURE.md` §3 records the route found on 2026-11-21
+   (`Hooks::block_drops` writing vanilla `minecraft:block_entity_data` onto the
+   dropped stack), proven by `rftoolsutility` 0.2.1, so this is the next slice
+   here, not a closed door.
 7. **The disk's contents only leave or enter through the commands.** Upstream the
    disk is inert without a Disk Drive and the drive reads its storage component;
    this port has no drive, so `/extradisks disk …` is the disk's whole interface.
@@ -354,42 +456,73 @@ The reviewer's items and their state:
     and the disk is the jar's `handheld` model; upstream draws nothing extra (no
     animated disk list), so nothing is lost here.
 11. **The off-hand disk** is not a command target (deviation 4).
-12. **The 0.2.0 interactions are not re-run in-game here.** This machine has no
-    `horizon-launcher`, so no game can be built carrying a *native* mod; the
-    package is compiled and checked against the exact pin, and the 0.1.0 in-game
-    run remains the behaviour evidence for the parts that did not change
-    (capacity, insert/extract, the saved encoding, persistence). The new
-    interaction paths (right-click over the typed hook, `break_block` giving,
-    the parsed commands) are typechecked only. `tools/e2e.sh` is updated for the
-    one-package layout and the new break semantics and must be run with
-    `GAME=<launcher-built horizon-client>` before the port claims `ported`.
+12. ~~The 0.2.0 interactions are not re-run in-game.~~ **Closed by slice 2
+    (2026-11-21):** the whole leg runs on a launcher-built game at the pin
+    (`extradisks-e2e/e2e-launcher.log`, `PASS` + `EXIT:0`), with the control
+    (`EXIT:1`) and `SELFTEST=1` (`EXIT:1`) legs beside it.
 13. **No glue unit tests.** The hook bodies need a host; the SDK's fake-host
     machinery is not part of the public mod surface this port uses, so the pure
     decisions live in `runtime.rs`/`codec.rs`/`format.rs` (26 tests) and the glue
     is proven in-game, not in `cargo test`.
+14. **The `fits` gate against an older build is red on a tool false positive**:
+    the build's usage scanner reads the `CommandArgumentValue::Item(stack)` match
+    arm as a literal construction of `type:Item`. Proven in
+    `../_shared/evidence/extradisks/fits-other-FALSE-POSITIVE.md`; the pin run,
+    `check` and the in-game argument path are all green.
+
+## Coverage (parity rule, 2026-11-20)
+
+Every family the jar's 1024k slice ships, and how it is proven. `tested` names the
+phase or assertion; nothing is left "it registers, so it must work".
+
+| Family | State | Evidence |
+|---|---|---|
+| the storage block: place, state, right-click in/out | tested | e2e `== the 1024k storage block places and starts empty ==`, `== a held stack right-clicked … ==` |
+| the storage engine (capacity, partial insert, refusal at full, resource identity, 256 bound) | tested | `runtime::tests` (17) + e2e fill/refusal/partial-insert phases |
+| the save and reload of a block entity | tested | e2e `== the block keeps its exact contents across a relaunch ==` |
+| the break path (contents to the breaker) | tested | e2e `== breaking a storage block gives its contents … ==` (100 and 2,000 items) |
+| the block's loot table | tested | e2e `== the block's loot table drops it, with a vanilla block as the control ==`; `tools/data_shape.py` |
+| the 1024k disk: component, commands, capacity, extraction | tested | `codec::tests`/`format::tests` + e2e disk phases |
+| the `/extradisks` command family | tested | every phase goes through `ctl chat "/extradisks …"` and asserts the parsed reply text |
+| an unknown id is refused | tested | e2e `== a vanilla barrel is not a storage block ==` (the refusal path); unknown-item give refusal is the control leg |
+| the creative tab | tested | the items are given/placed by id in the leg; the tab itself renders from `data/extradisks/horizon/creative_tab/extradisks.json` (carried, not clicked) |
+| recipes | not ported | gap 5: every jar recipe needs `refinedstorage:` ingredients/tags the parent port does not ship |
+| network node, energy, GUI, comparator, drive | not ported | gaps 1–3, 7, 9 |
+| the other 7 item rungs, 17 disks, 23 parts, fluid/chemical ladders | not ported | gap 4 |
+| storage carried on the dropped block item | blocked(`copy_components` is vanilla-only; `block_drops` route recorded) | gap 6 |
 
 ## Verification
 
-Pin: SDK nightly **`0b14f8acfd97fa2c750e42795249dcc981178ca4`**, mixins
-**`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**, API `0.2`, package format 6,
-launcher 0.2.78. Every step ran **directly in the port** with
-`CARGO_INCREMENTAL=0`, no staging and no `--target-dir` (see §4).
+Pin (slice 2, 2026-11-21): SDK nightly **`0a875da91dbb0fdcb7ba8c42c11341aa229af51a`**, mixins
+**`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**, API `0.2`, package format 6, launcher 0.2.92.
+Every compile/test step ran through `ports/tools/build-slot.sh` (`BUILD_LOCAL=1`,
+`CARGO_INCREMENTAL=0`, no staging, no `--target-dir`); the in-game leg is a launcher-built game at
+this pin. The 0.2.0 rows are historical and kept for the migration record.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices,rust-port
 
 | Step | Command | Result |
 |---|---|---|
-| runtime + pure tests | `cargo test` | **26 passed**, 0 failed (`evidence/extradisks/sdk-test.log`) |
-| lints | `cargo clippy --all-targets -- -D warnings` | exit 0, 0 warnings (`evidence/extradisks/sdk-clippy.log`) |
-| format | `cargo fmt --check` | clean (`evidence/extradisks/sdk-fmt.log`) |
-| package | `cargo horizon-mod build` | `target/horizon-mod/extradisks.hmod`, EXIT 0 (`evidence/extradisks/sdk-build.log`) |
-| registry check | `cargo horizon-mod check extradisks.hmod` | `extradisks 0.2.0 (native-mod, format native-1/0b14f8a/e59da90, for 26.3)`, **37,801 B**, sha256 `e47071a3…334f`, **EXIT 0** (`sdk-check.log`, `sdk-check-json.log`) |
-| what it uses | `unzip -p extradisks.hmod uses.json` | 252 surface entries (`sdk-uses.json`) |
-| fits the pinned build | `cargo horizon-mod fits extradisks.hmod --build nightly` | `0b14f8a  made for`, EXIT 0 (`sdk-fits.log`) |
+| runtime + pure tests | `cargo test --offline` | **26 passed**, 0 failed (`evidence/extradisks/sdk-test.log`, stamped with the delivered artifact's sha256/size) |
+| lints | `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`sdk-clippy.log`, stamped) |
+| format | `cargo fmt --check` | exit 0, clean (`sdk-fmt.log`, stamped) |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` twice | **38,022 B**, sha256 `100a271e7879a3e3ab54e4090bb21c8f0e689d7f1ab6e62255dfc29eeed07a1a`, **26 entries**, second build `cmp`-identical |
+| registry check | `cargo horizon-mod check extradisks.hmod` | `extradisks 0.2.1 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, **EXIT 0** (`sdk-check.log`, `sdk-check-json.log`, stamped) |
+| what it uses | `unzip -p extradisks.hmod uses.json` | `sdk-uses.json` (one recorded entry, `type:Item`, is the false positive in `fits-other-FALSE-POSITIVE.md`) |
+| fits the pin | `cargo horizon-mod fits extradisks.hmod --build 0a875da` | `0a875da  made for`, EXIT 0 (`sdk-fits.log`, stamped) |
+| fits another build | `… --build 0b14f8a` | **EXIT 1** on the scanner false positive (*"the type `Item` can no longer be built with a literal"*); proof in `sdk-fits-other.log` + `fits-other-FALSE-POSITIVE.md` |
 | `runtime.rs` untouched | `cmp` + `unzip -p … src/runtime.rs \| sha256sum` | `19614096…aa93` on disk, in the package and in the retired tree (`sdk-runtime-cmp.txt`) |
-| repeat build | `rm -f Cargo.lock; cargo horizon-mod build` again | same 37,801 B, same sha256, `cmp` clean |
-| symbols line | `python3 ports/tools/check-skills.py --notes ports/extradisks` | see the report; the `Skills:` line is above |
-| in-game e2e | `GAME=<launcher-built> tools/e2e.sh` | **not run**: no launcher here (gap 12) |
+| the gate | `python3 ports/tools/verify-sdk-package.py extradisks` | **1/1** (`verify-sdk-package.log`) |
+| in-game leg | `tools/e2e.sh` on the launcher build | **PASS + EXIT:0** (`extradisks-e2e/e2e-launcher.log`, artifact stamped) |
+| counterfactual | `SELFTEST=1 tools/e2e.sh` | `FAIL:` + **EXIT:1** (`extradisks-e2e/e2e-selftest.log`) |
+| control | `GAME=$CONTROL_GAME tools/e2e.sh` | `FAIL:` + **EXIT:1** (`extradisks-e2e/e2e-control.log`) |
+| red proof (loot) | the same loot assertion before the fix | `FAIL: the storage block dropped 0 of itself`, with the vanilla barrel at 1 (`e2e-loot-red.log`) |
+| log gate | `python3 ports/tools/check-e2e-logs.py extradisks-e2e --strict` | `logs=4 ok=4`, exit 0 |
+| symbols line | `python3 ports/tools/check-skills.py --notes ports/extradisks` | PASS (the `Skills:` line is above) |
+
+Historical (0.2.0, 2026-11-18): tests 26/26, clippy 0, fmt clean, package 37,801 B sha256
+`e47071a3…334f`, `check` + `fits --build nightly` exit 0, `runtime.rs` byte-identical; the in-game
+leg was **not** run then (no launcher), which slice 2 closed.
 
 ### What the 0.1.0 e2e shows (a headless run, `--headless`, creative)
 
@@ -445,6 +578,20 @@ both are roots of the `.hmod`. The jar is the evidence of the licence and stays 
 
 ## Changelog text (what the resubmission says)
 
+> **0.2.1 — the block's loot table in 26.3's dialect (in-game verified).** A
+> player who broke a 1024k storage block got its contents back but **lost the
+> block item**: the carried loot table still used NeoForge 1.21.1's
+> `"conditions": [...]` array and `"bonus_rolls"`, which 26.3 evaluates as false,
+> so the block dropped nothing. The table now uses the singular
+> `"condition": { "type": "minecraft:survives_explosion" }` and `"rolls": 1`, the
+> shape of the game's own block tables, and a break in survival drops exactly one
+> block beside the contents (proved in game with a vanilla barrel as the
+> differential). Also re-pinned to Horizon `0a875da`, mixins `e59da90`, and the
+> whole in-game leg — capacity to 1,048,576, refusal at full, partial insert, the
+> disk's component, the save/relaunch, the break — now runs on a launcher-built
+> game at this pin instead of resting on the 0.1.0 run. No engine change: the
+> storage rules are unchanged and unit-tested.
+>
 > **0.2.0 — native `.hmod` with the SDK (API 0.2).** Republished for the launcher
 > ≥ 0.2.70 mod API, superseding **0.1.0** and the closed **#874**: the retired
 > `.hnmod` container no longer loads (Horizon's mod-API merge #16941), so this
@@ -465,10 +612,13 @@ both are roots of the `.hmod`. The jar is the evidence of the licence and stays 
 - `src/codec.rs`, `src/format.rs` — pure helpers (9 tests); `src/storage_block.rs`, `src/disk.rs`, `src/commands.rs` — the glue.
 - `assets/extradisks/`, `data/extradisks/` — the carried content.
 - `LICENSE`, `LICENSE-NOTICE.md`, `README.md` — inside the package.
-- `tools/e2e.sh` — the in-game scenario; `FINDINGS.md`, this file.
-- `extradisks.hmod` — the delivered package, 37,801 B, sha256
-  `e47071a3c5ff8f0643330079ffb85810504d41a6a40e0adac8eff7b622b8334f`.
+- `tools/e2e.sh` — the in-game scenario; `tools/data_shape.py` — the 26.3 loot-dialect check;
+  `FINDINGS.md`, this file, `VALIDATION.md`.
+- `extradisks.hmod` — the delivered package, 38,022 B, sha256
+  `100a271e7879a3e3ab54e4090bb21c8f0e689d7f1ab6e62255dfc29eeed07a1a`, 26 entries.
 - Evidence: `../_shared/evidence/extradisks/` (`sdk-*.log`, `sdk-uses.json`,
-  `sdk-sha256.txt`, `sdk-entries.txt`, `sdk-runtime-cmp.txt`, and the retired
-  0.1.0 tree under `retired-hnmod-0.1.0/`). Jar:
+  `sdk-sha256.txt`, `sdk-entries.txt`, `sdk-runtime-cmp.txt`,
+  `data-shape-loot-red.log`, `fits-other-FALSE-POSITIVE.md`, and the retired
+  0.1.0 tree under `retired-hnmod-0.1.0/`); the game legs in
+  `../_shared/evidence/extradisks-e2e/`. Jar:
   `../_shared/licence-cache/ExtraDisks-1.21.1-4.0.15.jar`.

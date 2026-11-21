@@ -19,7 +19,9 @@
 #    is refused one item past capacity, and gives 64 back to the inventory;
 #  - a vanilla barrel is not a storage block;
 #  - the block keeps its exact contents and resources across `save` + relaunch;
-#  - breaking a block gives its contents to the breaker (small and multi-stack).
+#  - breaking a block gives its contents to the breaker (small and multi-stack);
+#  - the block's own loot table drops it, with a vanilla barrel broken in the same
+#    game as the differential, and every carried loot table is in 26.3's dialect.
 #
 # SELFTEST=1 asserts that the refused insert did grow the storage (it must FAIL),
 # which proves the scenario can fail.
@@ -37,10 +39,12 @@ KEEP=${KEEP:-0}
 WORLD=ExtraDisksE2E
 BLOCK=extradisks:1024k_item_storage_block
 DISK=extradisks:1024k_item_storage_disk
+HMOD=${HMOD:-$PORT/extradisks.hmod}
 
 [ -x "$CTL" ] || { echo "missing horizon-ctl: $CTL" >&2; exit 1; }
 [ -x "$GAME" ] || { echo "missing horizon-client: $GAME" >&2; exit 1; }
 [ -d "$RES/assets" ] || { echo "missing prepared resources: $RES" >&2; exit 1; }
+echo "artifact: $(basename "$HMOD") $(stat -c %s "$HMOD") B sha256 $(sha256sum "$HMOD" | cut -d' ' -f1)"
 
 SCRATCH=$(mktemp -d /tmp/opencode/extradisks-home.XXXXXX)
 export HORIZON_HOME=$SCRATCH/game
@@ -80,8 +84,13 @@ count_of() { # count_of ITEM
 }
 held() { ctl state | jq -r '.held.item // "nothing"'; }
 expect_playing() {
-    ctl screen | jq -e '.screen == "playing"' >/dev/null \
-        || fail "not in the world: $(ctl screen | jq -c '{screen}')"
+    # In a `--headless` world `ctl screen` is null (and can block), and `ctl state`
+    # is the reduced scripting summary with no `.server`; `wait-ready` returns the
+    # full snapshot, whose `.server.joined` is the reliable "the world is live" read.
+    local snap
+    snap=$(ctl wait-ready 180) || fail "wait-ready failed"
+    [ "$(jq -r '.server.joined // false' <<<"$snap")" = true ] \
+        || fail "not in the world: $(jq -c '{screen, joined: .server.joined, status: .server.status}' <<<"$snap")"
 }
 
 cleanup() {
@@ -103,7 +112,7 @@ launch() {
     "$CTL" --socket "$SOCK" launch \
         --game "$GAME" --world "$WORLD" --seed 20261105 --creative --headless --wait \
         --resources "$RES" >/dev/null
-    ctl wait-ready 120
+    ctl wait-ready 120 >/dev/null
     ctl wait 40
 }
 
@@ -193,11 +202,11 @@ ctl select "$DISK"
 ctl wait 4
 expect_line "The held 1024k storage disk: 0 / 1,048,576 items in 0 resources, 1,048,576 free" \
     extradisks disk info
-expect_line "Inserted 1,048,576 x minecraft:diamond (refused 0). The disk: 1,048,576 / 1,048,576 items in 1 resources, 0 free" \
+expect_line "Inserted 1,048,576 x minecraft:diamond (refused 0). The held 1024k storage disk: 1,048,576 / 1,048,576 items in 1 resources, 0 free" \
     extradisks disk insert minecraft:diamond 1048576
 expect_line "Refused: minecraft:diamond does not fit (the disk takes no more)." \
     extradisks disk insert minecraft:diamond 1
-expect_line "Extracted 64 x minecraft:diamond. The disk: 1,048,512 / 1,048,576 items in 1 resources, 64 free" \
+expect_line "Extracted 64 x minecraft:diamond. The held 1024k storage disk: 1,048,512 / 1,048,576 items in 1 resources, 64 free" \
     extradisks disk extract minecraft:diamond 64
 [ "$(count_of minecraft:diamond)" = 64 ] \
     || fail "the extracted diamonds are not in the inventory: $(ctl inventory | jq -c '[.hotbar[] | select(.item != null)]')"
@@ -252,7 +261,7 @@ ctl command "clear @s"
 ctl wait 4
 ctl command "execute in minecraft:the_end run setblock 44 64 0 $BLOCK"
 ctl wait 6
-expect_line "Inserted 2000 x minecraft:dirt (refused 0).; 1,046,576 of 1,048,576 free" \
+expect_line "Inserted 2,000 x minecraft:dirt (refused 0).; 1,046,576 of 1,048,576 free" \
     extradisks insert 44 64 0 minecraft:dirt 2000
 ctl break 44 64 0 >/dev/null || fail "cannot break the multi-stack storage block"
 ctl wait 6
@@ -264,5 +273,42 @@ echo "  the multi-stack storage gave back 2,000 dirt"
 ctl command "clear @s"
 ctl wait 4
 
-echo "PASS: the 1024k storage block took a held stack and gave it back, filled to exactly 1,048,576 items, refused one more and a new resource, took 576 of 1,000 in a partial insert, the held 1024k disk carried its own 1,048,576 diamonds and gave 64 back, a vanilla barrel is not a storage block, the block kept its exact contents across a relaunch, and breaking a block gave its contents back to the breaker (100 and 2,000 items)"
+echo "== the block's loot table drops it, with a vanilla block as the control =="
+# The break above proves the contents reach the breaker; this proves the block
+# item itself drops. The 1.21.1 `conditions` array makes 26.3 evaluate the pool
+# as false, so a broken block left nothing behind. The vanilla barrel broken in
+# the same game is the differential: a harness that cannot drop anything fails it
+# too, so an empty storage-block drop isolates the loot table.
+ctl command "gamemode survival @s"
+ctl command "clear @s"
+ctl give minecraft:iron_pickaxe 1
+ctl wait 4
+ctl select minecraft:iron_pickaxe >/dev/null || fail "no pickaxe in the hotbar"
+ctl command "execute in minecraft:the_end run setblock 48 64 0 minecraft:barrel"
+ctl command "execute in minecraft:the_end run setblock 46 64 0 $BLOCK"
+ctl wait 8
+ctl command "execute in minecraft:the_end run tp @s 46.5 64 2.5"
+ctl wait 6
+ctl look-at-block 48 64 0 >/dev/null 2>&1 || true
+reply=$(ctl break 48 64 0) || fail "cannot break the control barrel: $reply"
+echo "  vanilla barrel: $reply"
+got=$(jq -r '.drops["minecraft:barrel"] // 0' <<<"$reply")
+[ "$got" -ge 1 ] || fail "the vanilla control block dropped $got of itself: $reply"
+ctl wait 4
+ctl look-at-block 46 64 0 >/dev/null 2>&1 || true
+reply=$(ctl break 46 64 0) || fail "cannot break the storage block: $reply"
+echo "  $BLOCK: $reply"
+got=$(jq -r --arg d "$BLOCK" '.drops[$d] // 0' <<<"$reply")
+[ "$got" -ge 1 ] || fail "the storage block dropped $got of itself: $reply"
+[ "$(ctl block 46 64 0 | jq -r '.block // empty')" = "minecraft:air" ] \
+    || fail "the broken storage block is still there: $(ctl block 46 64 0)"
+ctl command "gamemode creative @s"
+ctl command "clear @s"
+ctl wait 4
+
+echo "== every carried loot table is in the 26.3 dialect =="
+python3 "$PORT/tools/data_shape.py" "$HMOD" \
+    || fail "a carried loot table is in the 1.21.1 dialect (see the lines above)"
+
+echo "PASS: the 1024k storage block took a held stack and gave it back, filled to exactly 1,048,576 items, refused one more and a new resource, took 576 of 1,000 in a partial insert, the held 1024k disk carried its own 1,048,576 diamonds and gave 64 back, a vanilla barrel is not a storage block, the block kept its exact contents across a relaunch, breaking a block gave its contents back to the breaker (100 and 2,000 items), and its loot table drops the block itself with a vanilla barrel as the control"
 # The cleanup trap prints EXIT:<status> as the last line.
